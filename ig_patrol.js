@@ -132,15 +132,26 @@ function stamp() {
   });
   const page = await context.newPage();
 
-  // 攔截所有 JSON 回應
+  // 攔截 API 回應
+  // 注意：IG 搜尋頁真正吐貼文的端點是 /api/graphql，content-type 是
+  // text/javascript 而非 application/json，所以不能只認 json（會漏掉 95% 的貼文）。
+  // 它的 body 也可能是多段 JSON 用換行串接，先整包 parse，失敗才逐行 parse。
   page.on("response", async (resp) => {
     try {
       const ct = resp.headers()["content-type"] || "";
-      if (!ct.includes("application/json")) return;
+      if (!/application\/json|text\/javascript/i.test(ct)) return;
       const u = resp.url();
       if (!/graphql|\/api\/|search|feed|serp|sections|tags/i.test(u)) return;
-      const data = await resp.json();
-      harvest(data);
+      const body = await resp.text();
+      if (!body.trimStart().startsWith("{")) return;   // 濾掉 JS bundle
+      try {
+        harvest(JSON.parse(body));
+      } catch {
+        for (const line of body.split("\n")) {
+          if (!line.trimStart().startsWith("{")) continue;
+          try { harvest(JSON.parse(line)); } catch {}
+        }
+      }
     } catch {}
   });
 
@@ -176,8 +187,13 @@ function stamp() {
   for (const p of all) {
     const relevant = RELEVANCE_KEYWORDS.some((k) => p.content.includes(k));
     const f = CONFIG.GROUP_FILTERS[p.group] || CONFIG.DEFAULT_FILTER;
+    const likesMax = f.LIKES_MAX ?? Infinity;
+    const commentsMax = f.COMMENTS_MAX ?? Infinity;
     p.relevant = relevant;
-    p.hit = relevant && p.likes >= f.LIKES_MIN && p.comments >= f.COMMENTS_MIN;
+    p.hit =
+      relevant &&
+      p.likes >= f.LIKES_MIN && p.likes <= likesMax &&
+      p.comments >= f.COMMENTS_MIN && p.comments <= commentsMax;
     p.hit_reason = p.hit ? `讚${p.likes}/留言${p.comments}` : "";
   }
 
@@ -199,7 +215,8 @@ function stamp() {
   log("──────── 完成 ────────");
   for (const g of Object.keys(CONFIG.KEYWORD_GROUPS)) {
     const f = CONFIG.GROUP_FILTERS[g] || CONFIG.DEFAULT_FILTER;
-    log(`主題「${g}」：抓 ${groupCount(g)} 篇，命中 ${filtered.filter(p=>p.group===g).length} 篇  (門檻 讚≥${f.LIKES_MIN}/留言≥${f.COMMENTS_MIN})`);
+    const range = (min, max) => `${min}~${max ?? "∞"}`;
+    log(`主題「${g}」：抓 ${groupCount(g)} 篇，命中 ${filtered.filter(p=>p.group===g).length} 篇  (門檻 讚${range(f.LIKES_MIN, f.LIKES_MAX)}/留言${range(f.COMMENTS_MIN, f.COMMENTS_MAX)})`);
   }
   log(`合計抓到 ${all.length} 篇，命中 ${filtered.length} 篇`);
   log("原始檔：", rawFile);
