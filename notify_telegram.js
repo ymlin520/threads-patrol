@@ -1,13 +1,13 @@
-// ── 發布前通知：把最新海巡命中結果 + 建議回覆稿傳到 Telegram ─────────
+// ── 發布前通知：Threads / IG / FB 海巡結果 + 建議回覆稿傳到 Telegram ──
 // 用法：node notify_telegram.js
 //
 // 憑證來源（擇一）：
 //   1. 環境變數 TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID（GitHub Actions 用 Secrets 帶入）
 //   2. telegram.local.json：{ "bot_token": "...", "chat_id": "..." }（本機用，勿進版控）
 //
-// 額外產出：output/replies_draft.json —— 每篇配好的回覆稿。
-// 下載 artifact 後把它放到專案根目錄（蓋掉舊的 replies_draft.json），
-// reply.js 就會照這份稿子回覆，跟 Telegram 預覽的內容一致。
+// 額外產出（存在 output/，會進 artifact）：
+//   replies_draft.json     Threads 回覆稿 → 放到專案根目錄後 node reply.js 照稿回
+//   ig_replies_draft.json  IG 回覆稿     → 放到專案根目錄後 node ig_reply.js 照稿回
 
 import fs from "fs";
 import path from "path";
@@ -15,6 +15,7 @@ import { fileURLToPath } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const LOCAL_CFG = path.join(__dirname, "telegram.local.json");
+const OUT = (f) => path.join(__dirname, "output", f);
 const log = (...a) => console.log("[notify]", ...a);
 
 // ✏️ 回覆範本（與 reply.js 同語氣，依主題隨機挑一句）
@@ -38,6 +39,13 @@ const REPLY_TEMPLATES = {
   ],
 };
 const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+
+// 三個平台的結果檔與回覆稿設定
+const PLATFORMS = [
+  { label: "🧵 Threads",   file: "filtered_latest.json",    draft: "replies_draft.json",    replyCmd: "node reply.js" },
+  { label: "📸 Instagram", file: "ig_filtered_latest.json", draft: "ig_replies_draft.json", replyCmd: "node ig_reply.js" },
+  { label: "📘 Facebook",  file: "fb_filtered_latest.json", draft: null,                    replyCmd: null },
+];
 
 function loadLocalCfg() {
   try { return JSON.parse(fs.readFileSync(LOCAL_CFG, "utf8")); } catch { return {}; }
@@ -76,60 +84,55 @@ async function detectChatId() {
   return id;
 }
 
-function loadHits() {
-  const f = path.join(__dirname, "output", "filtered_latest.json");
-  if (!fs.existsSync(f)) {
-    log("找不到 output/filtered_latest.json，請先執行 node patrol.js");
-    process.exit(1);
-  }
-  return JSON.parse(fs.readFileSync(f, "utf8"));
+function loadHits(file) {
+  try { return JSON.parse(fs.readFileSync(OUT(file), "utf8")); } catch { return null; }
 }
 
-// 每篇配一句建議回覆，並存成 reply.js 可直接用的回覆稿
-function buildDrafts(hits) {
+// 每篇配一句建議回覆；有 draft 檔名的平台會存回覆稿供 reply 腳本使用
+function buildDrafts(hits, draftFile) {
   const drafts = hits.map((h) => ({
-    group: h.group,
-    author: h.author,
-    likes: h.likes,
-    comments: h.comments,
-    url: h.url,
-    content: h.content,
+    group: h.group || "美食",
+    author: h.author || "",
+    likes: h.likes ?? 0,
+    comments: h.comments ?? 0,
+    url: h.url || "",
+    content: h.content || "",
     reply: pick(REPLY_TEMPLATES[h.group] || REPLY_TEMPLATES._default),
   }));
-  fs.writeFileSync(
-    path.join(__dirname, "output", "replies_draft.json"),
-    JSON.stringify(drafts, null, 2), "utf8"
-  );
+  if (draftFile) {
+    fs.writeFileSync(OUT(draftFile), JSON.stringify(drafts, null, 2), "utf8");
+  }
   return drafts;
 }
 
-function buildMessages(drafts) {
-  const now = new Date().toLocaleString("zh-TW", { timeZone: "Asia/Taipei", hour12: false });
-  const byGroup = {};
-  for (const d of drafts) (byGroup[d.group] ??= []).push(d);
-
-  const header = [`🐟 海巡完成 ${now}`, `命中 ${drafts.length} 篇（` +
-    Object.entries(byGroup).map(([g, a]) => `${g} ${a.length}`).join("／") + "）"];
-
-  const blocks = drafts.map((d, i) => {
+function platformSection(p, drafts) {
+  if (drafts === null) {
+    return `${p.label}：－（沒有結果檔：該平台憑證未設定，或今天執行失敗）`;
+  }
+  if (!drafts.length) {
+    return `${p.label}：抓到了但 0 篇命中門檻`;
+  }
+  const TOP = 6;
+  const lines = [`${p.label}：命中 ${drafts.length} 篇`];
+  drafts.slice(0, TOP).forEach((d, i) => {
     const excerpt = (d.content || "").slice(0, 40);
-    return [
-      `${i + 1}. [${d.group}] ${d.author}  讚${d.likes}/留言${d.comments}`,
+    lines.push(
+      `${i + 1}. ${d.author}  讚${d.likes}/留言${d.comments}`,
       `📝 ${excerpt}${(d.content || "").length > 40 ? "…" : ""}`,
       `💬 建議回覆：${d.reply}`,
-      `🔗 ${d.url}`,
-    ].join("\n");
+      `🔗 ${d.url}`
+    );
   });
+  if (drafts.length > TOP) lines.push(`…另有 ${drafts.length - TOP} 篇，詳見 artifact`);
+  return lines.join("\n");
+}
 
-  const footer = "⚠️ 尚未回覆任何貼文。回覆稿已存 replies_draft.json（在 artifact 裡）。\n" +
-    "下載後放到專案根目錄，執行 node reply.js 預覽、node reply.js --live 送出。";
-
-  // Telegram 單則上限 4096 字，超過就拆多則
+function chunkMessages(sections, header, footer) {
   const messages = [];
-  let cur = header.join("\n");
-  for (const b of blocks) {
-    if ((cur + "\n\n" + b).length > 3800) { messages.push(cur); cur = b; }
-    else cur += "\n\n" + b;
+  let cur = header;
+  for (const s of sections) {
+    if ((cur + "\n\n" + s).length > 3800) { messages.push(cur); cur = s; }
+    else cur += "\n\n" + s;
   }
   if ((cur + "\n\n" + footer).length > 3800) { messages.push(cur); cur = footer; }
   else cur += "\n\n" + footer;
@@ -140,12 +143,31 @@ function buildMessages(drafts) {
 (async () => {
   if (!chatId) chatId = await detectChatId();
 
-  const hits = loadHits();
-  const drafts = buildDrafts(hits);
-  const messages = buildMessages(drafts);
+  const now = new Date().toLocaleString("zh-TW", { timeZone: "Asia/Taipei", hour12: false });
+  let total = 0, anyFile = false;
+  const sections = [];
 
-  for (const text of messages) {
+  for (const p of PLATFORMS) {
+    const hits = loadHits(p.file);
+    if (hits === null) { sections.push(platformSection(p, null)); continue; }
+    anyFile = true;
+    const drafts = buildDrafts(hits, p.draft);
+    total += drafts.length;
+    sections.push(platformSection(p, drafts));
+  }
+
+  const header = `🐟 海巡完成 ${now}\n三平台合計命中 ${total} 篇`;
+  const footer =
+    "⚠️ 尚未回覆任何貼文。回覆稿已存 artifact（replies_draft.json / ig_replies_draft.json）。\n" +
+    "下載後放到專案根目錄，執行 node reply.js（Threads）/ node ig_reply.js（IG）預覽，加 --live 送出。";
+
+  for (const text of chunkMessages(sections, header, footer)) {
     await tg("sendMessage", { chat_id: chatId, text, disable_web_page_preview: true });
   }
-  log(`✅ 已通知 Telegram（chat_id=${chatId}，命中 ${hits.length} 篇，共 ${messages.length} 則訊息）`);
+  log(`✅ 已通知 Telegram（合計命中 ${total} 篇）`);
+
+  if (!anyFile) {
+    log("❌ 三個平台都沒有結果檔——請檢查憑證 secrets 與海巡步驟的 log");
+    process.exit(1);
+  }
 })().catch((e) => { log("❌", e.message); process.exit(1); });

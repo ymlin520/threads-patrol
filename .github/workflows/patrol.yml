@@ -1,6 +1,8 @@
-# ── 每天台灣時間 18:10 自動海巡 + Telegram 發布前通知 ──────────────
-# 需要先在 repo 設定三個 Secrets（Settings → Secrets and variables → Actions）：
-#   THREADS_AUTH_B64     auth_state.json 的 base64
+# ── 每天台灣時間 18:10 自動海巡（Threads + IG + FB）+ Telegram 發布前通知 ──
+# Secrets（Settings → Secrets and variables → Actions）：
+#   THREADS_AUTH_B64     auth_state.json 的 base64（必要）
+#   IG_AUTH_B64          ig_auth_state.json 的 base64（沒設就跳過 IG）
+#   FB_AUTH_B64          fb_auth_state.json 的 base64（沒設就跳過 FB）
 #   TELEGRAM_BOT_TOKEN   Telegram bot token
 #   TELEGRAM_CHAT_ID     你的 Telegram chat id
 #
@@ -17,7 +19,7 @@ on:
 jobs:
   patrol:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     env:
       TZ: Asia/Taipei
     steps:
@@ -35,16 +37,28 @@ jobs:
       - name: 還原登入憑證
         env:
           THREADS_AUTH_B64: ${{ secrets.THREADS_AUTH_B64 }}
+          IG_AUTH_B64: ${{ secrets.IG_AUTH_B64 }}
+          FB_AUTH_B64: ${{ secrets.FB_AUTH_B64 }}
         run: |
-          if [ -z "$THREADS_AUTH_B64" ]; then
-            echo "❌ 缺少 THREADS_AUTH_B64 secret（auth_state.json 的 base64），請到 Settings → Secrets and variables → Actions 新增"
-            exit 1
-          fi
-          echo "$THREADS_AUTH_B64" | base64 -d > auth_state.json
           mkdir -p output
+          if [ -n "$THREADS_AUTH_B64" ]; then echo "$THREADS_AUTH_B64" | base64 -d > auth_state.json; else echo "⚠️ 未設 THREADS_AUTH_B64，將跳過 Threads"; fi
+          if [ -n "$IG_AUTH_B64" ];      then echo "$IG_AUTH_B64"      | base64 -d > ig_auth_state.json; else echo "⚠️ 未設 IG_AUTH_B64，將跳過 IG"; fi
+          if [ -n "$FB_AUTH_B64" ];      then echo "$FB_AUTH_B64"      | base64 -d > fb_auth_state.json; else echo "⚠️ 未設 FB_AUTH_B64，將跳過 FB"; fi
 
-      - name: 海巡（xvfb 虛擬螢幕跑系統 Chrome）
+      - name: Threads 海巡
+        if: ${{ hashFiles('auth_state.json') != '' }}
+        continue-on-error: true
         run: xvfb-run --auto-servernum node patrol.js
+
+      - name: IG 海巡
+        if: ${{ hashFiles('ig_auth_state.json') != '' }}
+        continue-on-error: true
+        run: xvfb-run --auto-servernum node ig_patrol.js
+
+      - name: FB 海巡
+        if: ${{ hashFiles('fb_auth_state.json') != '' }}
+        continue-on-error: true
+        run: xvfb-run --auto-servernum node fb_patrol.js
 
       - name: Telegram 發布前通知
         env:
@@ -52,7 +66,7 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: node notify_telegram.js
 
-      - name: 上傳結果檔（CSV / JSON）
+      - name: 上傳結果檔（CSV / JSON / 回覆稿）
         if: always()
         uses: actions/upload-artifact@v4
         with:
