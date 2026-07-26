@@ -7,6 +7,10 @@ fb_auth_state.json
 ig_auth_state.json
 *_auth_state.json
 
+# ⚠️ Telegram bot token / chat_id（絕對不要進版控）
+telegram.local.json
+*.local.json
+
 # 爬蟲輸出（含他人貼文內容與個資）
 output/
 

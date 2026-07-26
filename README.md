@@ -11,6 +11,7 @@ threads-patrol/
 ├─ auth_setup.js        # 一次性：手動登入 @eat.map.journal，存登入狀態
 ├─ patrol.js            # 主爬蟲：搜尋→切最新→攔截 JSON 抓貼文→篩選→輸出
 ├─ reply.js             # 自動回覆：預設乾跑不送，--live 才實際發
+├─ notify_telegram.js   # 把命中結果＋建議回覆稿推播到 Telegram（不會回覆貼文）
 ├─ replies_draft.json   # 逐篇客製回覆稿（reply.js 優先讀這份）
 ├─ clean_output.js      # 清亂碼／特殊符號工具
 ├─ package.json
@@ -51,6 +52,28 @@ node patrol.js
 node clean_output.js
 ```
 
+### 3.5（可選）推播到 Telegram 先過目
+```bash
+npm run notify        # 等同 node notify_telegram.js
+```
+把命中的每一篇＋自動配好的建議回覆稿傳到你的 Telegram，**不會回覆任何貼文**。
+同時產生 `output/replies_draft.json`。訊息超過 Telegram 4096 字上限會自動拆成多則。
+
+憑證擇一設定：
+
+- 環境變數 `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID`
+  （GitHub Actions 走這條，見 `.github/workflows/patrol.yml`）
+- 本機用：專案根目錄建 `telegram.local.json`（已列入 `.gitignore`）
+  ```json
+  { "bot_token": "你的 bot token", "chat_id": "你的 chat id" }
+  ```
+  只填 `bot_token` 也可以 — 先在 Telegram 對 bot 傳一句話，
+  腳本會用 `getUpdates` 自動偵測 `chat_id` 並寫回設定檔。
+
+> ⚠️ 這支腳本寫的是 `output/replies_draft.json`，而 `reply.js` 讀的是**根目錄**的
+> `replies_draft.json`。要照這份稿子回覆，得先把檔案複製到根目錄
+> （從 Actions 下載 artifact 時同理）。
+
 ### 4. 回覆（先乾跑，確認 OK 再送）
 ```bash
 node reply.js          # 乾跑：只印出會回什麼，不送出
@@ -90,6 +113,7 @@ node ig_reply.js --live --max 1   # 實際留言（--max 限制篇數）
 
 ## 注意
 
-- ⚠️ `auth_state.json`（登入憑證）**不要外流、不要進版控**——本 zip 已排除。
+- ⚠️ `auth_state.json`（登入憑證）與 `telegram.local.json`（bot token）
+  **不要外流、不要進版控**——已列入 `.gitignore`。本 repo 是 public，推之前務必確認。
 - 回覆頻率請節制（reply.js 內建每次上限 8 篇、間隔 25–60 秒）。
 - Threads 改版時，搜尋／回覆的 selector 可能需微調。

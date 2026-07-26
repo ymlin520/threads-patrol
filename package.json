@@ -9,7 +9,8 @@
     "fb-auth": "node fb_auth.js",
     "fb-patrol": "node fb_patrol.js",
     "ig-auth": "node ig_auth.js",
-    "ig-patrol": "node ig_patrol.js"
+    "ig-patrol": "node ig_patrol.js",
+    "notify": "node notify_telegram.js"
   },
   "dependencies": {
     "playwright": "^1.62.0"
