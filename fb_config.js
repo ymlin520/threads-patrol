@@ -42,7 +42,7 @@ export const FB_CONFIG = {
   //   )
   LIKES_MIN: 0,
   COMMENTS_MIN: 3,
-  LIKES_MIN_UNKNOWN_COMMENTS: num(process.env.FB_LIKES_UNKNOWN, 30),
+  LIKES_MIN_UNKNOWN_COMMENTS: num(process.env.FB_LIKES_UNKNOWN, 50),
 };
 
 // 內文相關性判定（含任一即算「美食相關」）
