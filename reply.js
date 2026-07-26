@@ -85,11 +85,23 @@ function saveReplied(set) {
   fs.writeFileSync(REPLIED_LOG, JSON.stringify([...set], null, 2), "utf8");
 }
 
-// A 方案：逐篇客製稿（由 Claude 讀原文生成），沒有就回傳 null 走內建範本
+// A 方案：逐篇客製稿，沒有就回傳 null 走內建範本
+// 兩個位置都找，根目錄優先（手改的客製稿蓋過 notify_telegram.js 自動配的）：
+//   1. replies_draft.json           由 Claude 讀原文逐篇生成
+//   2. output/replies_draft.json    notify_telegram.js 產出，與 Telegram 預覽一致
 function loadDraft() {
-  const f = path.join(__dirname, "replies_draft.json");
-  if (!fs.existsSync(f)) return null;
-  try { return JSON.parse(fs.readFileSync(f, "utf8")); } catch { return null; }
+  const candidates = [
+    { file: path.join(__dirname, "replies_draft.json"), source: "replies_draft.json" },
+    { file: path.join(__dirname, "output", "replies_draft.json"), source: "output/replies_draft.json" },
+  ];
+  for (const { file, source } of candidates) {
+    if (!fs.existsSync(file)) continue;
+    try {
+      const data = JSON.parse(fs.readFileSync(file, "utf8"));
+      if (Array.isArray(data) && data.length) return { data, source };
+    } catch { /* 壞掉的檔案就跳過，換下一個位置 */ }
+  }
+  return null;
 }
 
 function replyFor(group) {
@@ -168,10 +180,10 @@ async function postReply(page, url, text) {
   let useDraft = false;
   let queue;
 
-  if (draft && draft.length) {
+  if (draft) {
     // A 方案：逐篇客製稿（已排序＋去重，直接照順序用）
     useDraft = true;
-    queue = draft
+    queue = draft.data
       .filter((p) => p.url && p.reply && !replied.has(p.url))
       .slice(0, MAX_REPLIES);
   } else {
@@ -191,7 +203,7 @@ async function postReply(page, url, text) {
   const textFor = (p) => sanitizeReply(useDraft ? p.reply : replyFor(p.group));
 
   log(`模式：${LIVE ? "🔴 LIVE（會實際送出）" : "🟢 乾跑（不送出）"}`);
-  log(`資料來源：${useDraft ? "逐篇客製稿 replies_draft.json" : "內建範本 REPLY_TEMPLATES"}`);
+  log(`資料來源：${useDraft ? `逐篇客製稿 ${draft.source}` : "內建範本 REPLY_TEMPLATES"}`);
   log(`本次處理 ${queue.length} 篇（上限 ${MAX_REPLIES}，已回覆過的略過）`);
   log("──────────────────────────────");
 

@@ -70,9 +70,7 @@ npm run notify        # 等同 node notify_telegram.js
   只填 `bot_token` 也可以 — 先在 Telegram 對 bot 傳一句話，
   腳本會用 `getUpdates` 自動偵測 `chat_id` 並寫回設定檔。
 
-> ⚠️ 這支腳本寫的是 `output/replies_draft.json`，而 `reply.js` 讀的是**根目錄**的
-> `replies_draft.json`。要照這份稿子回覆，得先把檔案複製到根目錄
-> （從 Actions 下載 artifact 時同理）。
+跑完直接執行 `node reply.js` 就會照這份稿子回覆，不必手動搬檔案。
 
 ### 4. 回覆（先乾跑，確認 OK 再送）
 ```bash
@@ -110,6 +108,14 @@ node ig_reply.js --live --max 1   # 實際留言（--max 限制篇數）
 
 - 逐篇客製：直接編輯 `replies_draft.json` 的 `reply` 欄位。
 - 語氣規則：見 `.claude/skills/eat-map-reply/SKILL.md`。
+
+`reply.js` 找回覆稿的順序（找到第一份可用的就停）：
+
+1. `replies_draft.json`（根目錄）— 手改的客製稿，優先權最高
+2. `output/replies_draft.json` — `notify_telegram.js` 自動產的，與 Telegram 預覽一致
+3. 兩份都沒有（或內容壞掉）→ 退回 `reply.js` 內建的 `REPLY_TEMPLATES`
+
+執行時會印出「資料來源」，送出前確認一下用的是哪一份。
 
 ## 注意
 
