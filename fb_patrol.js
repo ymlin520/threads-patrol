@@ -52,6 +52,8 @@ function findCount(node, keyNames, depth = 0) {
       if (v && typeof v === "object") {
         if (typeof v.count === "number") return v.count;
         if (typeof v.total_count === "number") return v.total_count;
+        // 留言數藏在多一層：comment_rendering_instance.comments.total_count
+        if (v.comments && typeof v.comments.total_count === "number") return v.comments.total_count;
       }
     }
   }
@@ -117,7 +119,13 @@ function harvest(node, depth = 0) {
     // 沒有內文的（例如純分享/廣告框）先略過
     if (id && text && !posts.has(id)) {
       const likes = findCount(node, ["i18n_reaction_count", "reaction_count", "reactioncount"]) ?? 0;
-      const comments = findCount(node, ["i18n_comment_count", "total_comment_count", "comment_count"]) ?? 0;
+      // FB 現行結構把留言數放在 feedback.comment_rendering_instance.comments.total_count，
+      // 舊的 i18n_comment_count / comment_count 已經不存在（實測全部抓到 0）。
+      // 舊名稱留著當備援，FB 改版時多一層保險。
+      const comments = findCount(node, [
+        "comment_rendering_instance",
+        "i18n_comment_count", "total_comment_count", "comment_count",
+      ]) ?? 0;
       const shares = findCount(node, ["i18n_share_count", "share_count"]) ?? 0;
       const ct = findCount(node, ["creation_time"]);
       posts.set(id, {
@@ -173,10 +181,13 @@ function stamp() {
   // 攔截所有 GraphQL / API JSON 回應
   page.on("response", async (resp) => {
     try {
-      const ct = resp.headers()["content-type"] || "";
-      if (!ct.includes("application/json") && !ct.includes("text/javascript")) return;
       const u = resp.url();
       if (!/graphql|\/api\//i.test(u)) return;
+      // 不能用 content-type 過濾：FB 的 GraphQL 回應實測是 text/html，
+      // 之前擋掉 json/javascript 以外的型別，等於把所有貼文資料丟光（永遠 0 篇）。
+      // 改成只看網址，內容能不能解析交給下面的 JSON.parse 判斷。
+      const ct = resp.headers()["content-type"] || "";
+      if (/^(image|video|font)\//.test(ct)) return;
       const body = await resp.text();
       // FB 有時一個回應塞多個 JSON（用換行分隔），逐段解析
       for (const chunk of body.split("\n")) {
@@ -189,13 +200,20 @@ function stamp() {
 
   capturing = true;
   const target = FB_CONFIG.TARGET_POSTS;
+  // 測試時可用 FB_KEYWORDS=2 只跑前兩個關鍵字
+  const keywords = FB_CONFIG.KEYWORD_LIMIT > 0
+    ? FB_CONFIG.KEYWORDS.slice(0, FB_CONFIG.KEYWORD_LIMIT)
+    : FB_CONFIG.KEYWORDS;
+  if (keywords.length < FB_CONFIG.KEYWORDS.length) {
+    log(`⚙️ 測試模式：只跑 ${keywords.length}/${FB_CONFIG.KEYWORDS.length} 個關鍵字，目標 ${target} 篇`);
+  }
 
-  for (let i = 0; i < FB_CONFIG.KEYWORDS.length; i++) {
+  for (let i = 0; i < keywords.length; i++) {
     if (posts.size >= target) break;
-    const kw = FB_CONFIG.KEYWORDS[i];
+    const kw = keywords[i];
     // FB「貼文」搜尋頁（預設排序偏熱門/相關）
     const searchUrl = `${BASE}/search/posts?q=${encodeURIComponent(kw)}`;
-    log(`[${i + 1}/${FB_CONFIG.KEYWORDS.length}] 搜尋「${kw}」  (目前已收集 ${posts.size} 篇)`);
+    log(`[${i + 1}/${keywords.length}] 搜尋「${kw}」  (目前已收集 ${posts.size} 篇)`);
     await page.goto(searchUrl, { waitUntil: "domcontentloaded" }).catch(() => {});
     await page.waitForTimeout(3500);
 
