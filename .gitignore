@@ -1,23 +1,21 @@
-# ── 登入憑證：絕對不能進版控 ─────────────────
+# 依賴
+node_modules/
+
+# ⚠️ 登入憑證（絕對不要進版控）
 auth_state.json
 fb_auth_state.json
-*auth_state*.json
+ig_auth_state.json
+*_auth_state.json
 
-# ── 抓取產出與含個資的資料 ───────────────────
+# 爬蟲輸出（含他人貼文內容與個資）
 output/
+
+# 個人執行記錄與回覆稿
 replied.json
+ig_replied.json
+fb_replied.json
+reply_stats.json
+ig_reply_stats.json
+fb_reply_stats.json
 replies_draft.json
-
-# ── 相依套件 ────────────────────────────────
-node_modules/
-package-lock.json
-
-# ── 雜項 ────────────────────────────────────
-.env
-.env.*
-*.log
-.DS_Store
-Thumbs.db
-
-# 本機個人設定
-.claude/settings.local.json
+ig_replies_draft.json

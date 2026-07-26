@@ -47,12 +47,26 @@ const REPLY_TEMPLATES = {
   ],
 };
 
-// ── 執行參數（可調）───────────────────────────────
-const MAX_REPLIES = 8;          // 每次執行最多回覆幾篇（保守，避免被風控）
-const DELAY_MIN = 25000;        // 每篇之間最短間隔（ms）
-const DELAY_MAX = 60000;        // 每篇之間最長間隔（ms）
+// ── 執行參數（防封號保險，別調高）──────────────────
+const MAX_REPLIES = 4;          // 單次執行上限（一口氣回太多最危險）
+const DAILY_MAX = 6;            // 每日總上限（跨次數累計，記在 reply_stats.json）
+const DELAY_MIN = 120000;       // 每篇間隔最短 2 分鐘
+const DELAY_MAX = 360000;       // 每篇間隔最長 6 分鐘（隨機，模擬真人）
+const ACTIVE_START = 9;         // 只在 09:00–23:00 執行（真人作息）
+const ACTIVE_END = 23;
 const REPLIED_LOG = path.join(__dirname, "replied.json");
+const STATS_LOG = path.join(__dirname, "reply_stats.json");
 // ──────────────────────────────────────────────────
+
+// 每日配額：{ date: "YYYY-MM-DD", count: n }
+function loadStats() {
+  const today = new Date().toISOString().slice(0, 10);
+  try {
+    const s = JSON.parse(fs.readFileSync(STATS_LOG, "utf8"));
+    return s.date === today ? s : { date: today, count: 0 };
+  } catch { return { date: today, count: 0 }; }
+}
+function saveStats(s) { fs.writeFileSync(STATS_LOG, JSON.stringify(s), "utf8"); }
 
 function loadHits() {
   const f = path.join(__dirname, "output", "filtered_latest.json");
@@ -82,43 +96,70 @@ function replyFor(group) {
   return pick(REPLY_TEMPLATES[group] || REPLY_TEMPLATES._default);
 }
 
+// 送出前消毒：清掉會變亂碼的字元（方塊/框線、取代字元、物件字元、零寬、控制字元、引號括號）
+// 並「剝除所有 emoji」——自動留言一律純文字，從根源避免 emoji 亂碼。
+function sanitizeReply(s) {
+  return (s || "")
+    .normalize("NFC")
+    .replace(/[\u{1F000}-\u{1FFFF}]/gu, "")  // emoji 主區（表情、食物、旗幟、膚色等）
+    .replace(/[\u{2600}-\u{27BF}]/gu, "")    // 雜項符號＋裝飾符號 ☀✨✔❤
+    .replace(/[\u{2B00}-\u{2BFF}]/gu, "")    // 雜項符號箭頭 ⭐⬇
+    .replace(/[\u{FE00}-\u{FE0F}]/gu, "")    // 變體選擇子（emoji 化尾碼）
+    .replace(/[─-▟▯]/g, "")       // 框線／方塊亂碼
+    .replace(/[￼�]/g, "")          // ￼ 物件字元、� 取代字元
+    .replace(/[​-‍﻿]/g, "")   // 零寬字元（含 ZWJ）
+    .replace(/[「」『』【】]/g, "")   // 全形引號括號（在留言框易顯示異常，改用語意表達）
+    .replace(/[ -]/g, " ")  // 控制字元
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 // ── 對單一貼文送出回覆（best-effort，selector 以實際頁面為準）──────
 async function postReply(page, url, text) {
   await page.goto(url, { waitUntil: "domcontentloaded" });
-  await page.waitForTimeout(3000);
+  await page.waitForTimeout(3500);
 
-  // 1) 點開回覆框（回覆/留言/Reply）
-  const openNames = ["回覆", "留言", "Reply"];
-  let opened = false;
-  for (const n of openNames) {
-    try {
-      const el = page.getByText(n, { exact: false }).first();
-      if (await el.count()) { await el.click({ timeout: 3000 }); opened = true; break; }
-    } catch {}
-  }
-  await page.waitForTimeout(1500);
-
-  // 2) 找到輸入框（contenteditable / textbox）並打字
+  // 1) 內嵌回覆框（contenteditable）— 直接點擊聚焦
   let box = page.locator('[contenteditable="true"]').first();
   if (!(await box.count())) box = page.getByRole("textbox").first();
   if (!(await box.count())) throw new Error("找不到回覆輸入框");
   await box.click({ timeout: 3000 });
-  await box.type(text, { delay: 40 });
+
+  // 2) 輸入內容：用 insertText 一次整串送（emoji/雙碼位才不會變方塊亂碼）
+  await page.keyboard.insertText(text);
   await page.waitForTimeout(1200);
 
-  // 3) 送出（發佈/Post）
-  const postNames = ["發佈", "發布", "Post", "張貼"];
-  for (const n of postNames) {
-    try {
-      const btn = page.getByRole("button", { name: n }).first();
-      if (await btn.count() && await btn.isEnabled()) {
-        await btn.click({ timeout: 3000 });
-        await page.waitForTimeout(2500);
-        return true;
-      }
-    } catch {}
+  // 2.5) 亂碼守門（參考 fb_comment.js）：讀回輸入框實際內容比對，不一致就重打一次，再不行就拒發
+  const norm = (s) => (s || "").replace(/\s+/g, "");
+  const readBack = async () =>
+    (await box.innerText().catch(() => "")) || (await box.textContent().catch(() => "")) || "";
+  let typed = await readBack();
+  if (norm(typed) !== norm(text)) {
+    // 清空重打一次
+    await box.click({ timeout: 3000 }).catch(() => {});
+    await page.keyboard.press("Control+A");
+    await page.keyboard.press("Delete");
+    await page.waitForTimeout(600);
+    await page.keyboard.insertText(text);
+    await page.waitForTimeout(1200);
+    typed = await readBack();
   }
-  throw new Error("找不到可用的送出按鈕");
+  if (norm(typed) !== norm(text)) {
+    throw new Error(`亂碼檢查失敗，拒絕送出（框內：${typed.slice(0, 50)}…）`);
+  }
+
+  // 3) 送出：Threads 內嵌回覆用 Ctrl+Enter（實測可用）
+  await page.keyboard.press("Control+Enter");
+  await page.waitForTimeout(3500);
+
+  // 4) 驗證：回覆框清空＝送出成功
+  let cleared = true;
+  try {
+    const t = (await page.locator('[contenteditable="true"]').first().innerText()) || "";
+    cleared = t.trim().length === 0;
+  } catch {}
+  if (!cleared) throw new Error("送出後回覆框未清空，可能未送出");
+  return true;
 }
 
 (async () => {
@@ -147,7 +188,7 @@ async function postReply(page, url, text) {
       })
       .slice(0, MAX_REPLIES);
   }
-  const textFor = (p) => (useDraft ? p.reply : replyFor(p.group));
+  const textFor = (p) => sanitizeReply(useDraft ? p.reply : replyFor(p.group));
 
   log(`模式：${LIVE ? "🔴 LIVE（會實際送出）" : "🟢 乾跑（不送出）"}`);
   log(`資料來源：${useDraft ? "逐篇客製稿 replies_draft.json" : "內建範本 REPLY_TEMPLATES"}`);
@@ -167,7 +208,20 @@ async function postReply(page, url, text) {
     process.exit(0);
   }
 
-  // LIVE：實際送出
+  // LIVE：實際送出 —— 先過三道保險
+  const hour = new Date().getHours();
+  if (hour < ACTIVE_START || hour >= ACTIVE_END) {
+    log(`⛔ 現在 ${hour} 點，不在安全時段（${ACTIVE_START}:00–${ACTIVE_END}:00），不執行`); process.exit(0);
+  }
+  const stats = loadStats();
+  if (stats.count >= DAILY_MAX) {
+    log(`⛔ 今日已回 ${stats.count} 篇，達每日上限 ${DAILY_MAX}，不執行`); process.exit(0);
+  }
+  const quota = Math.min(queue.length, DAILY_MAX - stats.count);
+  if (quota < queue.length) {
+    log(`今日剩餘配額 ${quota} 篇，只處理前 ${quota} 篇`);
+    queue.length = quota;
+  }
   if (!fs.existsSync(path.join(__dirname, CONFIG.AUTH_FILE))) {
     log("找不到 auth_state.json，請先 node auth_setup.js"); process.exit(1);
   }
@@ -187,7 +241,8 @@ async function postReply(page, url, text) {
       await postReply(page, p.url, text);
       replied.add(p.url); saveReplied(replied);
       ok++;
-      log("     ✅ 已送出");
+      stats.count++; saveStats(stats);   // 記入每日配額
+      log(`     ✅ 已送出（今日 ${stats.count}/${DAILY_MAX}）`);
     } catch (e) {
       log("     ⚠️ 失敗：", e.message);
     }

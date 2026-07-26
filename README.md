@@ -1,6 +1,7 @@
-# Threads 海巡機器人（@eat.map.journal）
+# Threads / FB / IG 海巡機器人（@eat.map.journal）
 
-自動巡邏 Threads「美食／旅遊」最新貼文 → 依互動熱度篩選 → 用本人語氣客製回覆。
+自動巡邏「美食／旅遊」最新貼文 → 依互動熱度篩選 → 用本人語氣客製回覆。
+支援三個平台：Threads（主力）、Facebook（`fb_*.js`）、Instagram（`ig_*.js`）。
 
 ## 檔案結構
 
@@ -57,6 +58,23 @@ node reply.js --live   # 實際送出
 ```
 已回覆過的記錄在 `replied.json`，不會重複回。
 
+## Instagram 版（ig_*.js）
+
+流程與 Threads 版相同，指令換成：
+
+```bash
+npm run ig-auth      # 一次性：手動登入 IG，存 ig_auth_state.json
+npm run ig-patrol    # 爬 IG 關鍵字搜尋頁 → output/ig_raw_*.csv / ig_filtered_latest.json
+node ig_reply.js             # 乾跑：預覽會留什麼，不送出
+node ig_reply.js --live --max 1   # 實際留言（--max 限制篇數）
+```
+
+- 設定在 `ig_config.js`（關鍵字比 Threads 版精簡，IG 反爬較嚴）。
+- 客製回覆稿放 `ig_replies_draft.json`；已回覆記錄在 `ig_replied.json`。
+- 留言送出後會驗證頁面上真的出現才算成功；驗證不到不會盲目重發（避免重複留言）。
+- 注意：IG 搜尋頁很多貼文 JSON 不帶讚數，單輪抓取量會比 Threads 少；
+  相關性關鍵字與 Threads 共用，在 IG 上偏鬆，命中結果建議人工掃一眼再回。
+
 ## 可調參數（config.js）
 
 - `KEYWORD_GROUPS`：美食／旅遊各自的搜尋關鍵字
@@ -67,12 +85,11 @@ node reply.js --live   # 實際送出
 
 ## 回覆內容怎麼改
 
-- 逐篇客製：複製 `replies_draft.example.json` 成 `replies_draft.json`，編輯其中的 `reply` 欄位。
+- 逐篇客製：直接編輯 `replies_draft.json` 的 `reply` 欄位。
 - 語氣規則：見 `.claude/skills/eat-map-reply/SKILL.md`。
 
 ## 注意
 
-- ⚠️ `auth_state.json`（登入憑證）**不要外流、不要進版控**——已列入 `.gitignore`。
-- ⚠️ `output/`、`replies_draft.json`、`replied.json` 含他人帳號與貼文內容，同樣已排除版控，請勿公開。
+- ⚠️ `auth_state.json`（登入憑證）**不要外流、不要進版控**——本 zip 已排除。
 - 回覆頻率請節制（reply.js 內建每次上限 8 篇、間隔 25–60 秒）。
 - Threads 改版時，搜尋／回覆的 selector 可能需微調。
