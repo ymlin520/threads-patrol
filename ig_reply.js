@@ -20,7 +20,12 @@ import { IG_CONFIG as CONFIG } from "./ig_config.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const LIVE = process.argv.includes("--live");
+const FORCE_HOURS = process.argv.includes("--force-hours");
 const maxArg = process.argv.indexOf("--max");
+const authorArg = process.argv.indexOf("--author");
+const TARGET_AUTHOR = authorArg > -1
+  ? (process.argv[authorArg + 1] || "").replace(/^@/, "").toLowerCase()
+  : "";
 const log = (...a) => console.log("[ig-reply]", ...a);
 const rnd = (min, max) => Math.floor(min + Math.random() * (max - min));
 const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
@@ -139,21 +144,54 @@ async function postComment(page, url, text) {
   await dismissDialogs(page);
 
   // 1) 留言框：IG 貼文頁是 <textarea>（aria-label 新增留言…）
-  let box = page.locator('form textarea').first();
-  if (!(await box.count())) box = page.locator("textarea").first();
+  const commentBox = () => page.locator([
+    "form textarea",
+    "textarea",
+    'input[placeholder*="留言"]',
+    'input[placeholder*="comment" i]',
+    '[contenteditable="true"][role="textbox"]',
+  ].join(",")).first();
+  let box = commentBox();
+  if (!(await box.count())) {
+    const commentButtons = [
+      'button:has(svg[aria-label="留言"])',
+      '[role="button"]:has(svg[aria-label="留言"])',
+      'button:has(svg[aria-label="Comment"])',
+      '[role="button"]:has(svg[aria-label="Comment"])',
+      'svg[aria-label="留言"]',
+      'svg[aria-label="Comment"]',
+    ];
+    for (const selector of commentButtons) {
+      const trigger = page.locator(selector).first();
+      if (await trigger.count()) {
+        await trigger.click({ timeout: 4000 });
+        await commentBox().waitFor({ state: "visible", timeout: 12000 }).catch(() => {});
+        break;
+      }
+    }
+    box = commentBox();
+  }
   if (!(await box.count())) throw new Error("找不到留言輸入框");
   await box.click({ timeout: 4000 });
   await page.waitForTimeout(600);
 
   // 2) 輸入：insertText 一次整串送（IG 點擊後 textarea 會重新掛載，重新定位一次）
-  box = page.locator("textarea:focus").first();
-  if (!(await box.count())) box = page.locator("form textarea").first();
+  box = page.locator([
+    "textarea:focus",
+    'input[placeholder*="留言"]:focus',
+    'input[placeholder*="comment" i]:focus',
+    '[contenteditable="true"][role="textbox"]:focus',
+  ].join(",")).first();
+  if (!(await box.count())) box = commentBox();
   await page.keyboard.insertText(text);
   await page.waitForTimeout(1200);
 
   // 2.5) 亂碼守門：讀回輸入框實際內容比對，不一致就重打一次，再不行拒發
   const norm = (s) => (s || "").replace(/\s+/g, "");
-  const readBack = async () => (await box.inputValue().catch(() => "")) || "";
+  const readBack = async () => box.evaluate((el) => {
+    if ("value" in el && el.value) return el.value;
+    return el.innerText || el.textContent || "";
+  }).catch(() => "");
   let typed = await readBack();
   if (norm(typed) !== norm(text)) {
     await box.click({ timeout: 3000 }).catch(() => {});
@@ -180,7 +218,10 @@ async function postComment(page, url, text) {
   await page.waitForTimeout(4000);
 
   // 4) 驗證一：留言框清空
-  const after = await page.locator("form textarea").first().inputValue().catch(() => "");
+  const after = await commentBox().evaluate((el) => {
+    if ("value" in el && el.value) return el.value;
+    return el.innerText || el.textContent || "";
+  }).catch(() => "");
   if (after && norm(after) === norm(text)) {
     throw new Error("送出後留言框沒清空，可能沒送出（不重試，請人工確認）");
   }
@@ -207,12 +248,14 @@ async function postComment(page, url, text) {
     useDraft = true;
     queue = draft.data
       .filter((p) => p.url && p.reply && !replied.has(p.url))
+      .filter((p) => !TARGET_AUTHOR || String(p.author || "").replace(/^@/, "").toLowerCase() === TARGET_AUTHOR)
       .slice(0, MAX_REPLIES);
   } else {
     const hits = loadHits();
     const seenAuthors = new Set();
     queue = hits
       .filter((p) => p.url && !replied.has(p.url))
+      .filter((p) => !TARGET_AUTHOR || String(p.author || "").replace(/^@/, "").toLowerCase() === TARGET_AUTHOR)
       .sort((a, b) => (b.likes + b.comments) - (a.likes + a.comments))
       .filter((p) => {
         if (seenAuthors.has(p.author)) return false;
@@ -242,7 +285,7 @@ async function postComment(page, url, text) {
 
   // LIVE：三道保險
   const hour = new Date().getHours();
-  if (hour < ACTIVE_START || hour >= ACTIVE_END) {
+  if (!FORCE_HOURS && (hour < ACTIVE_START || hour >= ACTIVE_END)) {
     log(`⛔ 現在 ${hour} 點，不在安全時段（${ACTIVE_START}:00–${ACTIVE_END}:00），不執行`); process.exit(0);
   }
   const stats = loadStats();
@@ -279,6 +322,10 @@ async function postComment(page, url, text) {
       else log(`     🟡 已送出但頁面上還沒看到（傳播延遲，不重發，請稍後人工確認）`);
     } catch (e) {
       log("     ⚠️ 失敗：", e.message);
+      await page.screenshot({
+        path: path.join(__dirname, "output", "ig_reply_error.png"),
+        fullPage: true,
+      }).catch(() => {});
     }
     if (i < queue.length - 1) {
       const wait = rnd(DELAY_MIN, DELAY_MAX);
