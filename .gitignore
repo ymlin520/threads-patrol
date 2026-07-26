@@ -1,0 +1,23 @@
+# ── 登入憑證：絕對不能進版控 ─────────────────
+auth_state.json
+fb_auth_state.json
+*auth_state*.json
+
+# ── 抓取產出與含個資的資料 ───────────────────
+output/
+replied.json
+replies_draft.json
+
+# ── 相依套件 ────────────────────────────────
+node_modules/
+package-lock.json
+
+# ── 雜項 ────────────────────────────────────
+.env
+.env.*
+*.log
+.DS_Store
+Thumbs.db
+
+# 本機個人設定
+.claude/settings.local.json

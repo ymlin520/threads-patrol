@@ -1,0 +1,22 @@
+[
+  {
+    "group": "美食",
+    "type": "提問",
+    "author": "@example_user_1",
+    "likes": 1234,
+    "comments": 56,
+    "url": "https://www.threads.com/@example_user_1/post/XXXXXXXXXXX",
+    "content": "（這裡是對方的貼文內文，patrol.js 會自動填）",
+    "reply": "（這裡寫你要回覆的內容，語氣規則見 .claude/skills/eat-map-reply/SKILL.md）"
+  },
+  {
+    "group": "旅遊",
+    "type": "經驗",
+    "author": "@example_user_2",
+    "likes": 321,
+    "comments": 12,
+    "url": "https://www.threads.com/@example_user_2/post/YYYYYYYYYYY",
+    "content": "（貼文內文）",
+    "reply": "（回覆內容）"
+  }
+]
