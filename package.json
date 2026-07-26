@@ -5,9 +5,7 @@
   "type": "module",
   "scripts": {
     "auth": "node auth_setup.js",
-    "patrol": "node patrol.js",
-    "fb-auth": "node fb_auth.js",
-    "fb-patrol": "node fb_patrol.js"
+    "patrol": "node patrol.js"
   },
   "dependencies": {
     "playwright": "^1.62.0"
