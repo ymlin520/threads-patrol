@@ -1,0 +1,62 @@
+# ── 每天台灣時間 18:10 自動海巡 + Telegram 發布前通知 ──────────────
+# 需要先在 repo 設定三個 Secrets（Settings → Secrets and variables → Actions）：
+#   THREADS_AUTH_B64     auth_state.json 的 base64
+#   TELEGRAM_BOT_TOKEN   Telegram bot token
+#   TELEGRAM_CHAT_ID     你的 Telegram chat id
+#
+# 注意：GitHub 排程可能比表定時間晚 3～15 分鐘（平台特性）。
+# 手動測試：Actions 頁籤 → threads-patrol → Run workflow
+
+name: threads-patrol
+
+on:
+  schedule:
+    - cron: "10 10 * * *" # UTC 10:10 = 台灣 18:10
+  workflow_dispatch:
+
+jobs:
+  patrol:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      TZ: Asia/Taipei
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: 安裝 Playwright（用系統 Chrome，不另外下載瀏覽器）
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+        run: npm install --no-audit --no-fund playwright
+
+      - name: 還原登入憑證
+        env:
+          THREADS_AUTH_B64: ${{ secrets.THREADS_AUTH_B64 }}
+        run: |
+          if [ -z "$THREADS_AUTH_B64" ]; then
+            echo "❌ 缺少 THREADS_AUTH_B64 secret（auth_state.json 的 base64），請到 Settings → Secrets and variables → Actions 新增"
+            exit 1
+          fi
+          echo "$THREADS_AUTH_B64" | base64 -d > auth_state.json
+          mkdir -p output
+
+      - name: 海巡（xvfb 虛擬螢幕跑系統 Chrome）
+        run: xvfb-run --auto-servernum node patrol.js
+
+      - name: Telegram 發布前通知
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: node notify_telegram.js
+
+      - name: 上傳結果檔（CSV / JSON）
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: patrol-output-${{ github.run_number }}
+          path: output/
+          retention-days: 14
+          if-no-files-found: ignore
