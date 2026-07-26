@@ -152,7 +152,7 @@ function csvEscape(v) {
 }
 
 function writeCsv(file, rows) {
-  const cols = ["author", "content", "likes", "comments", "shares", "posted_at", "url", "relevant", "hit", "hit_reason"];
+  const cols = ["author", "content", "likes", "comments", "comments_known", "shares", "posted_at", "url", "relevant", "hit", "hit_reason"];
   const lines = [cols.join(",")];
   for (const r of rows) lines.push(cols.map((c) => csvEscape(r[c])).join(","));
   fs.writeFileSync(file, "﻿" + lines.join("\n"), "utf8"); // BOM 讓 Excel 中文不亂碼
@@ -233,8 +233,16 @@ function stamp() {
   for (const p of all) {
     const relevant = FB_RELEVANCE_KEYWORDS.some((k) => p.content.includes(k));
     p.relevant = relevant;
-    p.hit = relevant && p.likes >= FB_CONFIG.LIKES_MIN && p.comments >= FB_CONFIG.COMMENTS_MIN;
-    p.hit_reason = p.hit ? `讚${p.likes}/留言${p.comments}` : "";
+    // FB 搜尋結果對部分貼文不給留言數（回 0），所以 0 一律視為「未知」，
+    // 改用較高的讚數門檻把關，避免把實際有留言的好目標整批篩掉。
+    const commentsKnown = p.comments > 0;
+    p.comments_known = commentsKnown;
+    p.hit = relevant && (commentsKnown
+      ? (p.likes >= FB_CONFIG.LIKES_MIN && p.comments >= FB_CONFIG.COMMENTS_MIN)
+      : p.likes >= FB_CONFIG.LIKES_MIN_UNKNOWN_COMMENTS);
+    p.hit_reason = p.hit
+      ? (commentsKnown ? `讚${p.likes}/留言${p.comments}` : `讚${p.likes}/留言數未知`)
+      : "";
   }
 
   const filtered = all
@@ -253,7 +261,11 @@ function stamp() {
   );
 
   log("──────── 完成 ────────");
-  log(`合計抓到 ${all.length} 篇，命中 ${filtered.length} 篇  (門檻 讚≥${FB_CONFIG.LIKES_MIN}/留言≥${FB_CONFIG.COMMENTS_MIN})`);
+  const unknownCnt = all.filter((p) => !p.comments_known).length;
+  log(`合計抓到 ${all.length} 篇，命中 ${filtered.length} 篇`);
+  log(`  門檻：留言數已知 → 讚≥${FB_CONFIG.LIKES_MIN}/留言≥${FB_CONFIG.COMMENTS_MIN}；` +
+      `留言數未知 → 讚≥${FB_CONFIG.LIKES_MIN_UNKNOWN_COMMENTS}`);
+  log(`  其中 ${unknownCnt}/${all.length} 篇 FB 沒給留言數（回 0，非真的零留言）`);
   log("原始檔：", rawFile);
   log("命中檔：", hitFile);
 

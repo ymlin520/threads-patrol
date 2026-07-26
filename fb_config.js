@@ -29,10 +29,20 @@ export const FB_CONFIG = {
   SCROLL_DELAY_MIN: 2200,    // 每次捲動後最短等待（ms，FB 較敏感，放慢一點）
   SCROLL_DELAY_MAX: 4500,
 
-  // ── 篩選門檻：命中 = 內文相關 AND 讚≥ AND 留言≥ ──────────
-  // 優先抓「留言 3 則以上」的貼文（有互動＝比較能回覆的目標）
+  // ── 篩選門檻 ──────────────────────────────────────
+  // 注意：FB 搜尋結果的 GraphQL 對「部分貼文」不給真實留言數，會回 0
+  //（實測某篇實際有 14 則留言，payload 裡 comment_rendering_instance
+  //  .comments.total_count 仍是 0，且整包 payload 找不到別的欄位帶正確值）。
+  // 所以 comments===0 要當「未知」而不是「真的沒人留言」，否則會把好目標全篩掉。
+  //
+  // 命中規則：
+  //   內文相關 AND (
+  //     留言數 > 0  → 套用 LIKES_MIN + COMMENTS_MIN
+  //     留言數 = 0  → 留言數不可信，改用較高的 LIKES_MIN_UNKNOWN_COMMENTS 把關
+  //   )
   LIKES_MIN: 0,
   COMMENTS_MIN: 3,
+  LIKES_MIN_UNKNOWN_COMMENTS: num(process.env.FB_LIKES_UNKNOWN, 30),
 };
 
 // 內文相關性判定（含任一即算「美食相關」）
