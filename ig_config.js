@@ -17,10 +17,8 @@ export const IG_CONFIG = {
     ],
   },
 
-  // 抓取量（IG 版保守一點）
-  // 修好 /api/graphql 攔截後，單一關鍵字捲 5 次就有 ~100 篇，
-  // 所以 TARGET 設高（等於不提早收工），讓 6 個關鍵字都跑到，來源才夠分散。
-  PER_GROUP_TARGET: 200,      // 每個主題各抓幾篇
+  // 抓取量（Meta 風控後採低風險模式）
+  PER_GROUP_TARGET: 25,       // 每個主題最多抓 25 篇
   SCROLLS_PER_KEYWORD: 5,     // 每個關鍵字最多捲動幾次
   SCROLL_DELAY_MIN: 2200,     // 每次捲動後最短等待（ms）
   SCROLL_DELAY_MAX: 4500,     // 每次捲動後最長等待（ms）

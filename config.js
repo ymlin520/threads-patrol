@@ -19,7 +19,7 @@ export const CONFIG = {
   },
 
   // 抓取量
-  PER_GROUP_TARGET: 50,       // 每個主題各抓幾篇（美食 50 + 旅遊 50）
+  PER_GROUP_TARGET: 25,       // 低風險模式：每個主題最多抓 25 篇
   SCROLLS_PER_KEYWORD: 8,     // 每個關鍵字最多捲動幾次
   SCROLL_DELAY_MIN: 1800,     // 每次捲動後最短等待（ms）
   SCROLL_DELAY_MAX: 3800,     // 每次捲動後最長等待（ms）

@@ -23,9 +23,9 @@ export const FB_CONFIG = {
   // 抓取量
   // 測試時想小量跑，用環境變數覆蓋，不必改這個檔：
   //   FB_TARGET=5 FB_KEYWORDS=2 FB_SCROLLS=3 node fb_patrol.js
-  TARGET_POSTS: num(process.env.FB_TARGET, 80),        // 總共想抓幾篇（達標就提早結束）
-  SCROLLS_PER_KEYWORD: num(process.env.FB_SCROLLS, 10),// 每個關鍵字最多捲動幾次
-  KEYWORD_LIMIT: num(process.env.FB_KEYWORDS, 0),      // >0 時只用前 N 個關鍵字（測試用）
+  TARGET_POSTS: num(process.env.FB_TARGET, 20),        // 低風險模式：最多抓 20 篇
+  SCROLLS_PER_KEYWORD: num(process.env.FB_SCROLLS, 3), // 每個關鍵字最多捲動 3 次
+  KEYWORD_LIMIT: num(process.env.FB_KEYWORDS, 2),      // 最多使用前 2 個關鍵字
   SCROLL_DELAY_MIN: 2200,    // 每次捲動後最短等待（ms，FB 較敏感，放慢一點）
   SCROLL_DELAY_MAX: 4500,
 
