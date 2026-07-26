@@ -238,5 +238,16 @@ function stamp() {
   log(`合計抓到 ${all.length} 篇，命中 ${filtered.length} 篇  (門檻 讚≥${FB_CONFIG.LIKES_MIN}/留言≥${FB_CONFIG.COMMENTS_MIN})`);
   log("原始檔：", rawFile);
   log("命中檔：", hitFile);
+
+  // 一篇都沒抓到＝不是「今天沒熱門貼文」，而是流程壞了（最常見是 session 其實沒登入）。
+  // 以前這裡照樣 exit 0，CI 會顯示綠燈，問題被藏住 —— 改成明確失敗。
+  if (all.length === 0) {
+    log("❌ 一篇都沒抓到，判定為失敗而非「今天沒貼文」。常見原因：");
+    log("   1. fb_auth_state.json 不是真的登入狀態（開 facebook.com 會停在「繼續／選擇帳號」畫面）");
+    log("      → 重跑 npm run fb-auth，確認有真的進到動態消息，再更新 FB_AUTH_B64 secret");
+    log("   2. session 過期或觸發 FB 安全驗證");
+    log("   3. FB 改版導致搜尋頁網址或 GraphQL 結構失效");
+    process.exit(1);
+  }
   process.exit(0);
 })();

@@ -23,3 +23,6 @@ ig_reply_stats.json
 fb_reply_stats.json
 replies_draft.json
 ig_replies_draft.json
+
+#本地變數
+.env
