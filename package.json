@@ -6,11 +6,15 @@
   "scripts": {
     "auth": "node auth_setup.js",
     "patrol": "node patrol.js",
+    "crawl-self": "node crawl_self.js",
+    "reply-solicit": "node reply.js --live --auto-solicit",
     "fb-auth": "node fb_auth.js",
     "fb-patrol": "node fb_patrol.js",
     "ig-auth": "node ig_auth.js",
     "ig-patrol": "node ig_patrol.js",
-    "notify": "node notify_telegram.js"
+    "notify": "node notify_telegram.js",
+    "telegram-approvals": "node telegram_approvals.js --wait 1800",
+    "test": "node --test"
   },
   "dependencies": {
     "playwright": "^1.62.0"

@@ -1,5 +1,5 @@
 // 單篇測試回覆：對指定貼文送出一則留言，每步截圖 + 發後驗證
-// 用法：node test_reply.js
+// 用法：node test_reply.js [貼文網址] [回覆內容]
 import { chromium } from "playwright";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -9,8 +9,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const OUT = path.join(__dirname, "output");
 const log = (...a) => console.log("[test]", ...a);
 
-const TARGET_URL = "https://www.threads.com/@lena____910828/post/Da8DTJRGK8B";
-const REPLY_TEXT = "不用浮誇造型、單純布丁或水果的反而最耐吃🥹 我也偏愛那種不靠裝飾、味道扎實的私藏蛋糕店～你是找哪一區的？1000內其實藏著不少低調寶藏🍰";
+const TARGET_URL = process.argv[2] || "https://www.threads.com/@lena____910828/post/Da8DTJRGK8B";
+const REPLY_TEXT = process.argv[3] || "不用浮誇造型、單純布丁或水果的反而最耐吃🥹 我也偏愛那種不靠裝飾、味道扎實的私藏蛋糕店～你是找哪一區的？1000內其實藏著不少低調寶藏🍰";
+const VERIFY_SNIPPET = REPLY_TEXT.slice(0, 16);
+const VERIFY_ONLY = process.argv.includes("--verify-only");
 
 const shot = async (page, name) => {
   const f = path.join(OUT, `cake_test_${name}.png`);
@@ -29,6 +31,29 @@ const shot = async (page, name) => {
   await page.goto(TARGET_URL, { waitUntil: "domcontentloaded" });
   await page.waitForTimeout(4000);
   await shot(page, "1_open");
+
+  if (VERIFY_ONLY) {
+    try {
+      const sort = page.getByText(/熱門|最相關/, { exact: true }).first();
+      if (await sort.count()) await sort.click({ timeout: 2500 });
+      await page.waitForTimeout(800);
+      const recent = page.getByText(/最新|近期/, { exact: true }).first();
+      if (await recent.count()) await recent.click({ timeout: 2500 });
+    } catch {}
+    await page.waitForTimeout(2500);
+    const found = await page.getByText(VERIFY_SNIPPET, { exact: false }).count().catch(() => 0);
+    await shot(page, "verify_only");
+    log(found > 0 ? `✅ 驗證成功：頁面上找到留言（含「${VERIFY_SNIPPET}」）` : "⚠️ 最新排序仍未找到留言，請人工確認；不會重送");
+    await browser.close();
+    process.exit(found > 0 ? 0 : 2);
+  }
+
+  const duplicate = await page.getByText(REPLY_TEXT, { exact: true }).count().catch(() => 0);
+  if (duplicate) {
+    log("↪ 頁面已有相同回覆，略過以避免重複留言");
+    await browser.close();
+    process.exit(0);
+  }
 
   // 1) 開啟回覆框：先試點「回覆」觸發區
   let opened = false;
@@ -68,7 +93,7 @@ const shot = async (page, name) => {
 
   // 檢查回覆框是否已清空（清空＝送出成功）；沒清空就改點圓形箭頭送出鈕
   let stillHasText = false;
-  try { stillHasText = (await page.locator('[contenteditable="true"]').first().innerText()).includes("私藏蛋糕"); } catch {}
+  try { stillHasText = (await page.locator('[contenteditable="true"]').first().innerText()).includes(VERIFY_SNIPPET); } catch {}
   if (stillHasText) {
     log("Ctrl+Enter 未送出，改點送出 icon 鈕...");
     let clicked = false;
@@ -83,10 +108,9 @@ const shot = async (page, name) => {
   // 4) 驗證：重載頁面，看留言文字是否出現
   await page.goto(TARGET_URL, { waitUntil: "domcontentloaded" });
   await page.waitForTimeout(4000);
-  const snippet = "私藏蛋糕店";
-  const found = await page.getByText(snippet, { exact: false }).count().catch(() => 0);
+  const found = await page.getByText(VERIFY_SNIPPET, { exact: false }).count().catch(() => 0);
   await shot(page, "5_verify");
-  log(found > 0 ? `✅ 驗證成功：頁面上找到留言（含「${snippet}」）` : "⚠️ 重載後沒抓到留言文字，請看截圖 5_verify 確認");
+  log(found > 0 ? `✅ 驗證成功：頁面上找到留言（含「${VERIFY_SNIPPET}」）` : "⚠️ 重載後沒抓到留言文字，請看截圖 5_verify 確認");
 
   await browser.close();
   process.exit(0);

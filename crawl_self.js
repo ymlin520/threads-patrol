@@ -19,6 +19,11 @@ const rnd = (min, max) => Math.floor(min + Math.random() * (max - min));
 const posts = new Map(); // code -> post
 let capturing = true;
 
+// 第二段（收留言）用：打開單篇貼文時，把別人的回覆暫存起來
+const MAX_REPLY_POSTS = Number(process.env.SELF_REPLY_POSTS || 100);
+const replyBuf = [];
+let collectingReplies = false;
+
 // 從任意 JSON 遞迴抽出「本人發的貼文」節點
 function harvest(node, depth = 0) {
   if (!capturing || !node || depth > 45) return;
@@ -32,6 +37,11 @@ function harvest(node, depth = 0) {
 
   if (looksLikePost) {
     const username = node.user?.username ?? "";
+    // 收留言階段：別人的貼文節點就是這篇的回覆
+    if (collectingReplies && username && username !== ME) {
+      const t = (node.caption?.text ?? node.text ?? "").trim();
+      if (t) replyBuf.push({ author: "@" + username, text: t });
+    }
     // 只留「本人」的貼文（自己的個人頁也會混入被回覆者/引用的貼文）
     if (username === ME && !posts.has(node.code)) {
       const text = node.caption?.text ?? node.text ?? "";
@@ -52,6 +62,43 @@ function harvest(node, depth = 0) {
     const v = node[k];
     if (v && typeof v === "object") harvest(v, depth + 1);
   }
+}
+
+async function collectDomReplies(page, currentCode) {
+  return page.evaluate(({ me, currentCode }) => {
+    const ignored = new Set(["回覆", "翻譯", "查看動態", "更多", "分享", "讚"]);
+    const results = [];
+    const seenCodes = new Set();
+    for (const link of document.querySelectorAll('a[href*="/post/"]')) {
+      const href = link.getAttribute("href") || "";
+      const match = href.match(/^\/@([^/]+)\/post\/([^/?#]+)/);
+      if (!match) continue;
+      const [, username, code] = match;
+      if (username === me || code === currentCode || seenCodes.has(code)) continue;
+
+      let box = link;
+      let lines = [];
+      for (let level = 0; level < 10 && box; level++, box = box.parentElement) {
+        lines = (box.innerText || "").split("\n").map((s) => s.trim()).filter(Boolean);
+        if (lines.length >= 3 && lines.includes(username)) break;
+      }
+      const text = lines
+        .filter((line) =>
+          line !== username &&
+          !ignored.has(line) &&
+          !/^\d+$/.test(line) &&
+          !/^\d{4}[年/-]\d{1,2}/.test(line) &&
+          !/^\d{4}-\d{1,2}-\d{1,2}$/.test(line)
+        )
+        .join(" ")
+        .trim();
+      if (text && text.length <= 500) {
+        seenCodes.add(code);
+        results.push({ author: `@${username}`, text });
+      }
+    }
+    return results;
+  }, { me: ME, currentCode });
 }
 
 (async () => {
@@ -95,9 +142,44 @@ function harvest(node, depth = 0) {
     }
   }
 
-  await browser.close();
-
+  // ── 第二段：逐篇打開自己的貼文，把底下的留言也收進來當素材 ──────
+  // 網友常在留言補「那家在OO路」「還有另一間也好吃」，這些字詞一樣能拿來配對。
+  // 和舊素材合併：Threads 偶爾只回傳部分個人頁，不能因此把歷史資料洗掉。
+  try {
+    const old = JSON.parse(fs.readFileSync(path.join(__dirname, "output", "self_posts.json"), "utf8"));
+    for (const p of Array.isArray(old) ? old : []) {
+      if (p.code && !posts.has(p.code)) posts.set(p.code, p);
+    }
+  } catch {}
   const all = [...posts.values()].sort((a, b) => (b.posted_at > a.posted_at ? 1 : -1));
+  const REPLY_TARGETS = all.slice(0, MAX_REPLY_POSTS);
+  log(`開始收留言（前 ${REPLY_TARGETS.length} 篇）...`);
+
+  for (let i = 0; i < REPLY_TARGETS.length; i++) {
+    const p = REPLY_TARGETS[i];
+    replyBuf.length = 0;
+    collectingReplies = true;
+    await page.goto(p.url, { waitUntil: "domcontentloaded" }).catch(() => {});
+    await page.waitForTimeout(rnd(2500, 4000));
+    await page.evaluate(() => window.scrollBy(0, 1500)).catch(() => {});
+    await page.waitForTimeout(rnd(1500, 2500));
+    collectingReplies = false;
+
+    // GraphQL 結構改版時，用頁面上實際顯示的回覆節點補抓。
+    const domReplies = await collectDomReplies(page, p.code).catch(() => []);
+    replyBuf.push(...domReplies);
+
+    // 去重（自己的回覆在兩條路徑都已排除）
+    const seen = new Set();
+    p.replies = replyBuf
+      .filter((r) => r.text && !seen.has(r.text) && seen.add(r.text))
+      .slice(0, 30);
+    if ((i + 1) % 10 === 0 || i === REPLY_TARGETS.length - 1) {
+      log(`  留言收集 ${i + 1}/${REPLY_TARGETS.length}`);
+    }
+  }
+
+  await browser.close();
   fs.mkdirSync(path.join(__dirname, "output"), { recursive: true });
   fs.writeFileSync(
     path.join(__dirname, "output", "self_posts.json"),
@@ -109,7 +191,8 @@ function harvest(node, depth = 0) {
   ).join("\n\n");
   fs.writeFileSync(path.join(__dirname, "output", "self_posts.txt"), "﻿" + txt, "utf8");
 
-  log(`──────── 完成：共抓到 ${all.length} 篇本人貼文 ────────`);
+  const replyTotal = all.reduce((n, p) => n + (p.replies?.length || 0), 0);
+  log(`──────── 完成：共 ${all.length} 篇本人貼文、${replyTotal} 則留言 ────────`);
   log("JSON：output/self_posts.json");
   log("純文字：output/self_posts.txt");
   process.exit(0);

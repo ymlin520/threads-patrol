@@ -13,6 +13,7 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { screenPost, screenBatch } from "./post_filters.js";
+import { buildCommentReply } from "./self_match.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const LOCAL_CFG = path.join(__dirname, "telegram.local.json");
@@ -58,7 +59,7 @@ const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
 const PLATFORMS = [
   { label: "🧵 Threads",   file: "filtered_latest.json",    draft: "replies_draft.json",    replyCmd: "node reply.js" },
   { label: "📸 Instagram", file: "ig_filtered_latest.json", draft: "ig_replies_draft.json", replyCmd: "node ig_reply.js" },
-  { label: "📘 Facebook",  file: "fb_filtered_latest.json", draft: null,                    replyCmd: null },
+  { label: "📘 Facebook",  file: "fb_filtered_latest.json", draft: "fb_replies_draft.json", replyCmd: "node fb_comment.js post" },
 ];
 
 function loadLocalCfg() {
@@ -79,14 +80,21 @@ if (!TOKEN && !DRY_RUN) {
 const API = `https://api.telegram.org/bot${TOKEN}`;
 
 async function tg(method, payload) {
-  const res = await fetch(`${API}/${method}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json; charset=utf-8" },
-    body: JSON.stringify(payload ?? {}),
-  });
-  const data = await res.json();
-  if (!data.ok) throw new Error(`Telegram ${method} 失敗：${data.description}`);
-  return data.result;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const res = await fetch(`${API}/${method}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json; charset=utf-8" },
+      body: JSON.stringify(payload ?? {}),
+    });
+    const data = await res.json();
+    if (data.ok) return data.result;
+    const retryAfter = Number(data.parameters?.retry_after || 0);
+    if (retryAfter && attempt < 2) {
+      await new Promise((resolve) => setTimeout(resolve, (retryAfter + 1) * 1000));
+      continue;
+    }
+    throw new Error(`Telegram ${method} 失敗：${data.description}`);
+  }
 }
 
 async function detectChatId() {
@@ -123,6 +131,8 @@ function buildDrafts(hits, draftFile) {
     const group = h.group || "美食";
     // 海巡端已標記就用它，沒有（舊結果檔）就當場判一次
     const solicit = h.solicit ?? screenPost(h).solicit;
+    // 只有徵求文且能高信心配到「自己舊文下的留言」時，才採用留言素材。
+    const self = buildCommentReply(h.content || "", solicit);
     return {
       group,
       author: h.author || "",
@@ -131,7 +141,12 @@ function buildDrafts(hits, draftFile) {
       url: h.url || "",
       content: h.content || "",
       solicit,
-      reply: replyFor(group, solicit),
+      reply: self ? self.reply : replyFor(group, solicit),
+      reply_source: self ? self.reply_source : "罐頭稿",
+      matched_url: self?.matched_url ?? "",
+      matched_comment: self?.matched_comment ?? "",
+      match_terms: self?.match_terms ?? "",
+      auto_reply_eligible: Boolean(self?.auto_reply_eligible),
     };
   });
   if (draftFile) {
@@ -168,7 +183,7 @@ function platformSection(p, drafts) {
       lines.push(
         `${i + 1}. ${d.author}  讚${d.likes}/留言${d.comments}${d.solicit ? "  🙋徵集文" : ""}`,
         `📝 ${excerpt}${(d.content || "").length > 40 ? "…" : ""}`,
-        `💬 建議回覆：${d.reply}`,
+        `💬 ${d.auto_reply_eligible ? "可自動回覆（舊文留言有答案）" : "建議回覆"}：${d.reply}`,
         `🔗 ${d.url}`
       );
     });
@@ -213,20 +228,26 @@ function chunkMessages(sections, header, footer) {
   const now = new Date().toLocaleString("zh-TW", { timeZone: "Asia/Taipei", hour12: false });
   let total = 0, anyFile = false;
   const sections = [];
+  const approvalDrafts = {};
 
   for (const p of PLATFORMS) {
     const hits = loadHits(p.file);
     if (hits === null) { sections.push(platformSection(p, null)); continue; }
     anyFile = true;
     const drafts = buildDrafts(hits, p.draft);
+    const approvalCode =
+      p.file === "filtered_latest.json" ? "th" :
+      p.file === "ig_filtered_latest.json" ? "ig" :
+      p.file === "fb_filtered_latest.json" ? "fb" : "";
+    if (approvalCode) approvalDrafts[approvalCode] = drafts;
     total += drafts.length;
     sections.push(platformSection(p, drafts));
   }
 
   const header = `🐟 海巡完成 ${now}\n三平台合計命中 ${total} 篇`;
   const footer =
-    "⚠️ 尚未回覆任何貼文。回覆稿已存 artifact（replies_draft.json / ig_replies_draft.json）。\n" +
-    "下載後放到專案根目錄，執行 node reply.js（Threads）/ node ig_reply.js（IG）預覽，加 --live 送出。";
+    "⚠️ 尚未回覆任何貼文；請使用後續各平台核准按鈕，按下後會立即公開留言。\n" +
+    "回覆稿已存 artifact（replies_draft.json / ig_replies_draft.json / fb_replies_draft.json）。";
 
   const messages = chunkMessages(sections, header, footer);
   if (DRY_RUN) {
@@ -238,6 +259,38 @@ function chunkMessages(sections, header, footer) {
   } else {
     for (const text of messages) {
       await tg("sendMessage", { chat_id: chatId, text, disable_web_page_preview: true });
+    }
+    const runId = process.env.GITHUB_RUN_ID || `local-${Date.now()}`;
+    const approvalLabels = {
+      th: { icon: "🧵", name: "Threads" },
+      ig: { icon: "📸", name: "Instagram" },
+      fb: { icon: "📘", name: "Facebook" },
+    };
+    for (const [code, drafts] of Object.entries(approvalDrafts)) {
+      const platform = approvalLabels[code];
+      for (const [index, draft] of drafts.entries()) {
+        const excerpt = (draft.content || "").slice(0, 180);
+        const text = [
+          `${platform.icon} ${platform.name} 發布核准 ${index + 1}/${drafts.length}`,
+          `${draft.author || "未知作者"}　讚${draft.likes ?? 0}/留言${draft.comments ?? 0}`,
+          excerpt,
+          "",
+          `💬 ${draft.reply}`,
+          draft.url,
+          "",
+          "按下按鈕後會立即公開留言；按鈕於本次 Action 監聽結束後失效。",
+        ].join("\n");
+        await tg("sendMessage", {
+          chat_id: chatId,
+          text,
+          disable_web_page_preview: true,
+          reply_markup: {
+            inline_keyboard: [[
+              { text: `✅ 發布這則 ${platform.name} 留言`, callback_data: `${code}:${runId}:${index}` },
+            ]],
+          },
+        });
+      }
     }
     log(`✅ 已通知 Telegram（合計命中 ${total} 篇）`);
   }

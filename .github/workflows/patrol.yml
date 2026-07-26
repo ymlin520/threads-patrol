@@ -50,6 +50,13 @@ jobs:
         continue-on-error: true
         run: xvfb-run --auto-servernum node patrol.js
 
+      - name: 更新自己的 Threads 貼文與留言素材
+        if: ${{ hashFiles('auth_state.json') != '' }}
+        continue-on-error: true
+        env:
+          SELF_REPLY_POSTS: "100"
+        run: xvfb-run --auto-servernum node crawl_self.js
+
       - name: IG 海巡
         if: ${{ hashFiles('ig_auth_state.json') != '' }}
         continue-on-error: true
@@ -65,6 +72,19 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: node notify_telegram.js
+
+      - name: 等待 Telegram 核准社群留言（30 分鐘）
+        if: ${{ hashFiles('output/*replies_draft.json') != '' }}
+        continue-on-error: true
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: xvfb-run --auto-servernum node telegram_approvals.js --wait 1800
+
+      - name: 自動回答有留言素材的 Threads 徵求文
+        if: ${{ hashFiles('auth_state.json') != '' }}
+        continue-on-error: true
+        run: xvfb-run --auto-servernum node reply.js --live --auto-solicit
 
       - name: 上傳結果檔（CSV / JSON / 回覆稿）
         if: always()

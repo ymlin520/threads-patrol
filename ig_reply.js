@@ -23,9 +23,13 @@ const LIVE = process.argv.includes("--live");
 const FORCE_HOURS = process.argv.includes("--force-hours");
 const maxArg = process.argv.indexOf("--max");
 const authorArg = process.argv.indexOf("--author");
+const urlArg = process.argv.indexOf("--url");
+const textArg = process.argv.indexOf("--text");
 const TARGET_AUTHOR = authorArg > -1
   ? (process.argv[authorArg + 1] || "").replace(/^@/, "").toLowerCase()
   : "";
+const DIRECT_URL = urlArg > -1 ? process.argv[urlArg + 1] || "" : "";
+const DIRECT_TEXT = textArg > -1 ? process.argv[textArg + 1] || "" : "";
 const log = (...a) => console.log("[ig-reply]", ...a);
 const rnd = (min, max) => Math.floor(min + Math.random() * (max - min));
 const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
@@ -244,7 +248,14 @@ async function postComment(page, url, text) {
   let useDraft = false;
   let queue;
 
-  if (draft) {
+  if (DIRECT_URL && DIRECT_TEXT) {
+    if (replied.has(DIRECT_URL)) {
+      log(`⏭️ 這篇已回覆過：${DIRECT_URL}`);
+      process.exit(10);
+    }
+    useDraft = true;
+    queue = [{ group: "Telegram 核准", author: "Telegram", likes: 0, comments: 0, url: DIRECT_URL, reply: DIRECT_TEXT }];
+  } else if (draft) {
     useDraft = true;
     queue = draft.data
       .filter((p) => p.url && p.reply && !replied.has(p.url))
@@ -267,7 +278,7 @@ async function postComment(page, url, text) {
   const textFor = (p) => sanitizeReply(useDraft ? p.reply : replyFor(p.group));
 
   log(`模式：${LIVE ? "🔴 LIVE（會實際送出）" : "🟢 乾跑（不送出）"}`);
-  log(`資料來源：${useDraft ? `逐篇客製稿 ${draft.source}` : "內建範本 REPLY_TEMPLATES"}`);
+  log(`資料來源：${DIRECT_URL ? "Telegram 單篇核准" : useDraft ? `逐篇客製稿 ${draft.source}` : "內建範本 REPLY_TEMPLATES"}`);
   log(`本次處理 ${queue.length} 篇（上限 ${MAX_REPLIES}，已回覆過的略過）`);
   log("──────────────────────────────");
 
@@ -336,5 +347,5 @@ async function postComment(page, url, text) {
 
   await browser.close();
   log(`──────── 完成：成功 ${ok}/${queue.length} 篇 ────────`);
-  process.exit(0);
+  process.exit(ok === queue.length ? 0 : 1);
 })();

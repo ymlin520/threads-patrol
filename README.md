@@ -77,6 +77,26 @@ npm run notify        # 等同 node notify_telegram.js
 node reply.js          # 乾跑：只印出會回什麼，不送出
 node reply.js --live   # 實際送出
 ```
+
+### 用自己舊文底下的留言回答徵求文
+
+```bash
+npm run crawl-self
+node notify_telegram.js --dry-run
+node reply.js --auto-solicit          # 預覽高信心徵求文，不送出
+node reply.js --live --auto-solicit   # 只送出高信心徵求文
+```
+
+`crawl_self.js` 會讀自己的舊 Threads 貼文，並逐篇收集網友留言。系統只有在下列條件
+全部成立時才會自動回覆：
+
+- 海巡貼文明確是「求推薦／有人吃過嗎」等徵求文。
+- 舊文留言確實含有回答，不是「蹲一個／不知道／沒吃過」。
+- 新舊內容有相同特殊名稱（例如「空也」），或同時命中地區與主題。
+- 結果未踩雷、沒有回覆過，且仍在每日與單次配額內。
+
+GitHub Actions 每日會更新最多 100 篇舊文的留言素材，通知完成後最多自動回答 2 篇；
+其餘一般海巡命中仍只產生草稿，不會自動送出。
 已回覆過的記錄在 `replied.json`，不會重複回。
 
 ## Instagram 版（ig_*.js）

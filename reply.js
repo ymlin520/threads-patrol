@@ -17,6 +17,13 @@ import { CONFIG } from "./config.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const LIVE = process.argv.includes("--live"); // 沒帶 --live 就是乾跑
+const FORCE_HOURS = process.argv.includes("--force-hours");
+// 只處理「徵求文＋舊文留言高信心匹配」；給每日排程使用，不碰一般草稿。
+const AUTO_SOLICIT = process.argv.includes("--auto-solicit");
+const urlArg = process.argv.indexOf("--url");
+const textArg = process.argv.indexOf("--text");
+const DIRECT_URL = urlArg > -1 ? process.argv[urlArg + 1] || "" : "";
+const DIRECT_TEXT = textArg > -1 ? process.argv[textArg + 1] || "" : "";
 const log = (...a) => console.log("[reply]", ...a);
 const rnd = (min, max) => Math.floor(min + Math.random() * (max - min));
 const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
@@ -90,7 +97,9 @@ function saveReplied(set) {
 //   1. replies_draft.json           由 Claude 讀原文逐篇生成
 //   2. output/replies_draft.json    notify_telegram.js 產出，與 Telegram 預覽一致
 function loadDraft() {
-  const candidates = [
+  const candidates = AUTO_SOLICIT ? [
+    { file: path.join(__dirname, "output", "replies_draft.json"), source: "output/replies_draft.json" },
+  ] : [
     { file: path.join(__dirname, "replies_draft.json"), source: "replies_draft.json" },
     { file: path.join(__dirname, "output", "replies_draft.json"), source: "output/replies_draft.json" },
   ];
@@ -130,6 +139,11 @@ function sanitizeReply(s) {
 async function postReply(page, url, text) {
   await page.goto(url, { waitUntil: "domcontentloaded" });
   await page.waitForTimeout(3500);
+
+  // CI 每次是全新環境，replied.json 不一定能跨天保留；直接看貼文頁是否已有同文，
+  // 避免同一篇徵求文在隔天再次被搜尋到時重複留言。
+  const existing = page.getByText(text, { exact: true });
+  if (await existing.count().catch(() => 0)) return "already";
 
   // 1) 內嵌回覆框（contenteditable）— 直接點擊聚焦
   let box = page.locator('[contenteditable="true"]').first();
@@ -171,7 +185,7 @@ async function postReply(page, url, text) {
     cleared = t.trim().length === 0;
   } catch {}
   if (!cleared) throw new Error("送出後回覆框未清空，可能未送出");
-  return true;
+  return "posted";
 }
 
 (async () => {
@@ -180,13 +194,27 @@ async function postReply(page, url, text) {
   let useDraft = false;
   let queue;
 
-  if (draft) {
+  if (DIRECT_URL && DIRECT_TEXT) {
+    if (replied.has(DIRECT_URL)) {
+      log(`⏭️ 這篇已回覆過：${DIRECT_URL}`);
+      process.exit(10);
+    }
+    useDraft = true;
+    queue = [{ group: "Telegram 核准", author: "Telegram", likes: 0, comments: 0, url: DIRECT_URL, reply: DIRECT_TEXT }];
+  } else if (draft) {
     // A 方案：逐篇客製稿（已排序＋去重，直接照順序用）
     useDraft = true;
     queue = draft.data
-      .filter((p) => p.url && p.reply && !replied.has(p.url))
-      .slice(0, MAX_REPLIES);
+      .filter((p) =>
+        p.url && p.reply && !replied.has(p.url) &&
+        (!AUTO_SOLICIT || (p.solicit && p.auto_reply_eligible))
+      )
+      .slice(0, AUTO_SOLICIT ? 2 : MAX_REPLIES);
   } else {
+    if (AUTO_SOLICIT) {
+      log("找不到 output/replies_draft.json，安全起見不自動回覆");
+      process.exit(0);
+    }
     // B 方案（fallback）：沒客製稿時用內建範本，依互動數高→低、同作者最多 1 篇
     const hits = loadHits();
     const seenAuthors = new Set();
@@ -202,8 +230,8 @@ async function postReply(page, url, text) {
   }
   const textFor = (p) => sanitizeReply(useDraft ? p.reply : replyFor(p.group));
 
-  log(`模式：${LIVE ? "🔴 LIVE（會實際送出）" : "🟢 乾跑（不送出）"}`);
-  log(`資料來源：${useDraft ? `逐篇客製稿 ${draft.source}` : "內建範本 REPLY_TEMPLATES"}`);
+  log(`模式：${LIVE ? "🔴 LIVE（會實際送出）" : "🟢 乾跑（不送出）"}${AUTO_SOLICIT ? "／只回高信心徵求文" : ""}`);
+  log(`資料來源：${DIRECT_URL ? "Telegram 單篇核准" : useDraft ? `逐篇客製稿 ${draft.source}` : "內建範本 REPLY_TEMPLATES"}`);
   log(`本次處理 ${queue.length} 篇（上限 ${MAX_REPLIES}，已回覆過的略過）`);
   log("──────────────────────────────");
 
@@ -222,7 +250,7 @@ async function postReply(page, url, text) {
 
   // LIVE：實際送出 —— 先過三道保險
   const hour = new Date().getHours();
-  if (hour < ACTIVE_START || hour >= ACTIVE_END) {
+  if (!FORCE_HOURS && (hour < ACTIVE_START || hour >= ACTIVE_END)) {
     log(`⛔ 現在 ${hour} 點，不在安全時段（${ACTIVE_START}:00–${ACTIVE_END}:00），不執行`); process.exit(0);
   }
   const stats = loadStats();
@@ -237,7 +265,7 @@ async function postReply(page, url, text) {
   if (!fs.existsSync(path.join(__dirname, CONFIG.AUTH_FILE))) {
     log("找不到 auth_state.json，請先 node auth_setup.js"); process.exit(1);
   }
-  const browser = await chromium.launch({ headless: false, channel: CONFIG.CHANNEL });
+  const browser = await chromium.launch({ headless: Boolean(process.env.CI), channel: CONFIG.CHANNEL });
   const context = await browser.newContext({
     storageState: CONFIG.AUTH_FILE, viewport: { width: 1280, height: 900 }, locale: "zh-TW",
   });
@@ -250,11 +278,15 @@ async function postReply(page, url, text) {
     log(`#${i + 1}/${queue.length} [${p.group}] ${p.url}`);
     log(`     ↪ 回覆：「${text}」`);
     try {
-      await postReply(page, p.url, text);
+      const result = await postReply(page, p.url, text);
       replied.add(p.url); saveReplied(replied);
-      ok++;
-      stats.count++; saveStats(stats);   // 記入每日配額
-      log(`     ✅ 已送出（今日 ${stats.count}/${DAILY_MAX}）`);
+      if (result === "already") {
+        log("     ↪ 頁面已有相同回覆，略過");
+      } else {
+        ok++;
+        stats.count++; saveStats(stats);   // 記入每日配額
+        log(`     ✅ 已送出（今日 ${stats.count}/${DAILY_MAX}）`);
+      }
     } catch (e) {
       log("     ⚠️ 失敗：", e.message);
     }
@@ -267,5 +299,5 @@ async function postReply(page, url, text) {
 
   await browser.close();
   log(`──────── 完成：成功 ${ok}/${queue.length} 篇 ────────`);
-  process.exit(0);
+  process.exit(ok === queue.length ? 0 : 1);
 })();
