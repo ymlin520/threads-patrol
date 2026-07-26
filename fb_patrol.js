@@ -11,6 +11,7 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { FB_CONFIG, FB_RELEVANCE_KEYWORDS } from "./fb_config.js";
+import { screenBatch } from "./post_filters.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BASE = FB_CONFIG.BASE_URL;
@@ -152,7 +153,7 @@ function csvEscape(v) {
 }
 
 function writeCsv(file, rows) {
-  const cols = ["author", "content", "likes", "comments", "comments_known", "shares", "posted_at", "url", "relevant", "hit", "hit_reason"];
+  const cols = ["author", "content", "likes", "comments", "comments_known", "shares", "posted_at", "url", "relevant", "solicit", "exclude_reason", "hit", "hit_reason"];
   const lines = [cols.join(",")];
   for (const r of rows) lines.push(cols.map((c) => csvEscape(r[c])).join(","));
   fs.writeFileSync(file, "﻿" + lines.join("\n"), "utf8"); // BOM 讓 Excel 中文不亂碼
@@ -230,20 +231,25 @@ function stamp() {
 
   // ── 篩選 ───────────────────────────────────────────────
   const all = [...posts.values()];
-  for (const p of all) {
+  const screens = screenBatch(all);
+  all.forEach((p, idx) => {
     const relevant = FB_RELEVANCE_KEYWORDS.some((k) => p.content.includes(k));
+    const s = screens[idx];
     p.relevant = relevant;
+    p.solicit = s.solicit;
+    p.exclude_reason = s.exclude_reason;
     // FB 搜尋結果對部分貼文不給留言數（回 0），所以 0 一律視為「未知」，
     // 改用較高的讚數門檻把關，避免把實際有留言的好目標整批篩掉。
     const commentsKnown = p.comments > 0;
     p.comments_known = commentsKnown;
-    p.hit = relevant && (commentsKnown
+    p.hit = relevant && !s.excluded && (commentsKnown
       ? (p.likes >= FB_CONFIG.LIKES_MIN && p.comments >= FB_CONFIG.COMMENTS_MIN)
       : p.likes >= FB_CONFIG.LIKES_MIN_UNKNOWN_COMMENTS);
     p.hit_reason = p.hit
-      ? (commentsKnown ? `讚${p.likes}/留言${p.comments}` : `讚${p.likes}/留言數未知`)
+      ? (commentsKnown ? `讚${p.likes}/留言${p.comments}` : `讚${p.likes}/留言數未知`) +
+        (s.solicit ? "・徵集文" : "")
       : "";
-  }
+  });
 
   const filtered = all
     .filter((p) => p.hit)

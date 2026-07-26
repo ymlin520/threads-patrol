@@ -12,6 +12,7 @@
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+import { screenPost, screenBatch } from "./post_filters.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const LOCAL_CFG = path.join(__dirname, "telegram.local.json");
@@ -32,6 +33,19 @@ const REPLY_TEMPLATES = {
     "剛好最近想找地方放空，謝謝你分享，改天照著去走走🌿",
     "這種走完心情會變好的地方最剛好了，先筆記起來✨",
     "不用去很遠，這種轉個彎就是風景的路最療癒了🥾",
+  ],
+  // 徵集文專用：貼文是在跟大家要推薦，不能回「這間我收進口袋名單了」
+  // （貼文裡根本沒有「這間」）。要真的丟一間出來，才接得上。
+  "徵集_美食": [
+    "來報一間🙋 巷子裡那種沒有招牌、老闆記得你上次點什麼的店，吃過就會一直回訪",
+    "我丟一個🥹 那種開很久、菜單一直沒變、每次去都安心的老店，最耐吃",
+    "跟著這串筆記！順便交出我的：不浮誇但很有靈魂的那種小店最對味✨",
+    "偷偷說一間🤫 這種要走進巷子才找得到的，通常最不會踩雷",
+  ],
+  "徵集_旅遊": [
+    "來報一個🙋 不用衝很遠，那種轉個彎就是風景的地方最耐走",
+    "我丟一個🌿 人少、安靜、待著就會慢下來的那種，超推",
+    "跟著筆記這串！順便交出我的：走完心情會變好的地方最剛好✨",
   ],
   _default: [
     "謝謝你偷偷分享🥹 這種口袋名單真的很珍貴，收好了",
@@ -91,17 +105,35 @@ function loadHits(file) {
   try { return JSON.parse(fs.readFileSync(OUT(file), "utf8")); } catch { return null; }
 }
 
+// 依貼文性質挑回覆稿：徵集文要用「我也丟一間」的語氣，不能用分享文那套
+function replyFor(group, solicit) {
+  const key = solicit ? `徵集_${group}` : group;
+  return pick(REPLY_TEMPLATES[key] || REPLY_TEMPLATES[group] || REPLY_TEMPLATES._default);
+}
+
 // 每篇配一句建議回覆；有 draft 檔名的平台會存回覆稿供 reply 腳本使用
 function buildDrafts(hits, draftFile) {
-  const drafts = hits.map((h) => ({
-    group: h.group || "美食",
-    author: h.author || "",
-    likes: h.likes ?? 0,
-    comments: h.comments ?? 0,
-    url: h.url || "",
-    content: h.content || "",
-    reply: pick(REPLY_TEMPLATES[h.group] || REPLY_TEMPLATES._default),
-  }));
+  // 保險：結果檔可能是舊版海巡產生的（還沒有雷區／太舊過濾），這裡再擋一次
+  const screens = screenBatch(hits);
+  const safe = hits.filter((_, i) => !screens[i].excluded);
+  const dropped = hits.length - safe.length;
+  if (dropped) log(`⚠️ 結果檔中有 ${dropped} 篇踩到雷區或太舊，已排除`);
+
+  const drafts = safe.map((h) => {
+    const group = h.group || "美食";
+    // 海巡端已標記就用它，沒有（舊結果檔）就當場判一次
+    const solicit = h.solicit ?? screenPost(h).solicit;
+    return {
+      group,
+      author: h.author || "",
+      likes: h.likes ?? 0,
+      comments: h.comments ?? 0,
+      url: h.url || "",
+      content: h.content || "",
+      solicit,
+      reply: replyFor(group, solicit),
+    };
+  });
   if (draftFile) {
     fs.writeFileSync(OUT(draftFile), JSON.stringify(drafts, null, 2), "utf8");
   }
@@ -134,7 +166,7 @@ function platformSection(p, drafts) {
     arr.slice(0, TOP_PER_GROUP).forEach((d, i) => {
       const excerpt = (d.content || "").slice(0, 40);
       lines.push(
-        `${i + 1}. ${d.author}  讚${d.likes}/留言${d.comments}`,
+        `${i + 1}. ${d.author}  讚${d.likes}/留言${d.comments}${d.solicit ? "  🙋徵集文" : ""}`,
         `📝 ${excerpt}${(d.content || "").length > 40 ? "…" : ""}`,
         `💬 建議回覆：${d.reply}`,
         `🔗 ${d.url}`

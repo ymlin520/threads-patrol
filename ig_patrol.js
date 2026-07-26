@@ -11,6 +11,7 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { IG_CONFIG as CONFIG, RELEVANCE_KEYWORDS } from "./ig_config.js";
+import { screenBatch } from "./post_filters.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BASE = CONFIG.BASE_URL;
@@ -107,7 +108,7 @@ function csvEscape(v) {
 }
 
 function writeCsv(file, rows) {
-  const cols = ["group","author","content","likes","comments","posted_at","url","relevant","hit","hit_reason"];
+  const cols = ["group","author","content","likes","comments","posted_at","url","relevant","solicit","exclude_reason","hit","hit_reason"];
   const lines = [cols.join(",")];
   for (const r of rows) lines.push(cols.map((c) => csvEscape(r[c])).join(","));
   fs.writeFileSync(file, "﻿" + lines.join("\n"), "utf8"); // BOM 讓 Excel 中文不亂碼
@@ -184,18 +185,22 @@ function stamp() {
 
   // ── 篩選 ────────────────────────────────────────────────
   const all = [...posts.values()];
-  for (const p of all) {
+  const screens = screenBatch(all);
+  all.forEach((p, idx) => {
     const relevant = RELEVANCE_KEYWORDS.some((k) => p.content.includes(k));
     const f = CONFIG.GROUP_FILTERS[p.group] || CONFIG.DEFAULT_FILTER;
     const likesMax = f.LIKES_MAX ?? Infinity;
     const commentsMax = f.COMMENTS_MAX ?? Infinity;
+    const s = screens[idx];
     p.relevant = relevant;
+    p.solicit = s.solicit;
+    p.exclude_reason = s.exclude_reason;
     p.hit =
-      relevant &&
+      relevant && !s.excluded &&
       p.likes >= f.LIKES_MIN && p.likes <= likesMax &&
       p.comments >= f.COMMENTS_MIN && p.comments <= commentsMax;
-    p.hit_reason = p.hit ? `讚${p.likes}/留言${p.comments}` : "";
-  }
+    p.hit_reason = p.hit ? `讚${p.likes}/留言${p.comments}${s.solicit ? "・徵集文" : ""}` : "";
+  });
 
   const filtered = all
     .filter((p) => p.hit)
